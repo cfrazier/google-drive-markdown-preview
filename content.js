@@ -10,8 +10,8 @@ class GoogleDriveMarkdownPreview {
   constructor() {
     this.isEnabled = true;
     this.theme = 'light';
-    this.toggleButton = null;
     this._bodyObserver = null;
+    this._docObservers = new Map();
 
     gdmdLog('constructor: initializing');
     this.init();
@@ -127,9 +127,7 @@ class GoogleDriveMarkdownPreview {
   // Persistent observer on a document element. Fires when Drive swaps
   // children (keyboard nav) or when the <pre> is first populated.
   _watchDocElement(docEl) {
-    // Don't double-observe the same element
-    if (docEl._gdmdObserved) return;
-    docEl._gdmdObserved = true;
+    if (this._docObservers.has(docEl)) return;
 
     const observer = new MutationObserver((mutations) => {
       if (!this.isEnabled) return;
@@ -156,6 +154,7 @@ class GoogleDriveMarkdownPreview {
     });
 
     observer.observe(docEl, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label'] });
+    this._docObservers.set(docEl, observer);
     gdmdLog('observer: watching docElement: ' + docEl.getAttribute('aria-label'));
   }
 
@@ -188,29 +187,32 @@ class GoogleDriveMarkdownPreview {
     const container = document.createElement('div');
     container.className = 'gdmd-toggle-container';
 
-    this.toggleButton = document.createElement('button');
-    this.toggleButton.className = 'gdmd-toggle-button';
-    this.toggleButton.textContent = 'Show Raw';
-    this.toggleButton.title = 'Toggle between rendered and raw markdown';
+    const toggleButton = document.createElement('button');
+    toggleButton.className = 'gdmd-toggle-button';
+    toggleButton.textContent = 'Show Raw';
+    toggleButton.title = 'Toggle between rendered and raw markdown';
 
-    this.toggleButton.addEventListener('click', () => {
+    toggleButton.addEventListener('click', () => {
       const rendered = contentEl.nextSibling;
       if (contentEl.style.display === 'none') {
         contentEl.style.display = 'block';
         if (rendered) rendered.style.display = 'none';
-        this.toggleButton.textContent = 'Show Rendered';
+        toggleButton.textContent = 'Show Rendered';
       } else {
         contentEl.style.display = 'none';
         if (rendered) rendered.style.display = 'block';
-        this.toggleButton.textContent = 'Show Raw';
+        toggleButton.textContent = 'Show Raw';
       }
     });
 
-    container.appendChild(this.toggleButton);
+    container.appendChild(toggleButton);
     contentEl.parentNode.insertBefore(container, contentEl);
   }
 
   cleanup() {
+    this._docObservers.forEach(obs => obs.disconnect());
+    this._docObservers.clear();
+
     document.querySelectorAll('.gdmd-toggle-container').forEach(el => el.remove());
     document.querySelectorAll('.gdmd-markdown-content').forEach(el => el.remove());
     document.querySelectorAll('pre[style*="display: none"], .a-b-r-La[style*="display: none"]')
