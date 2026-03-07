@@ -15,16 +15,15 @@ This is a Chrome extension (Manifest V3) - no build commands needed. To develop:
 ## Architecture Overview
 
 ### Core Architecture
-This is a Chrome extension that automatically detects and renders markdown files in Google Drive preview mode. It uses event-driven triggers with a simple scan-all-and-render approach to handle Google Drive's dynamic, cached DOM.
+This is a Chrome extension that automatically detects and renders markdown files in Google Drive preview mode. It uses a two-level MutationObserver architecture — zero timeouts, zero polling — to react to Drive's DOM changes as they happen.
 
 ### Key Components
 
 **content.js** - Main content script injected into Google Drive pages
 - `GoogleDriveMarkdownPreview` class handles the entire lifecycle
-- `tryDetectAndRender()` - Scans ALL `[role="document"]` elements for unrendered `.md` previews
+- Two-level observer architecture (see below)
+- `_tryRenderPre(docEl)` - Checks a document element for an unrendered `.md` `<pre>` and renders it
 - `renderMarkdown(contentEl, rawText)` - Converts markdown via marked.js and sanitizes with DOMPurify
-- Three event triggers: dblclick, `navigationChanged` message from service worker, ArrowLeft/ArrowRight keydown
-- `scheduleDetection(delay)` - Debounces trigger events before scanning
 
 **background.js** - Service worker for extension lifecycle
 - Detects SPA navigations via `chrome.webNavigation.onHistoryStateUpdated` and notifies content script
@@ -48,13 +47,22 @@ Drive caches multiple file previews in the DOM simultaneously. The extension tar
 
 ### Critical Implementation Details
 
-**Render-all strategy**: Drive caches previous file previews in the DOM — old `[role="document"]` elements persist alongside new ones. Rather than trying to identify the "current" file (which is fragile), the extension scans all document elements and renders any `<pre class="a-b-r-La">` that hasn't already been rendered. The "already rendered" check is a simple DOM test: if the `<pre>` is hidden and its next sibling is our `.gdmd-markdown-content` wrapper, it's already done.
+**Two-level MutationObserver architecture (no timeouts)**:
+
+1. **Body observer** (`document.body`, `childList + subtree`) — Watches for any `[role="document"]` element being added anywhere in the page. Does NOT filter on `aria-label` at this stage because Drive may set the label after inserting the element. When a document element is found, calls `renderDocElement()`.
+
+2. **Doc element observer** (per `[role="document"]`, `childList + subtree + characterData + attributes[aria-label]`) — Persistent observer on each document element. Fires when:
+   - Drive sets/changes the `aria-label` attribute (catches deferred label assignment)
+   - Drive adds the `<pre>` child (catches deferred content population)
+   - Drive swaps children on keyboard navigation (catches file switching in an existing container)
+   - Filters out mutations caused by our own DOM insertions (`.gdmd-markdown-content`, `.gdmd-toggle-container`)
+
+**Why two levels**: Drive uses two different patterns depending on how the user navigates:
+- **Double-click**: Creates a new `[role="document"]` element → body observer catches it
+- **Keyboard nav (arrow keys)**: Sometimes reuses an existing document element and swaps its children, sometimes creates a new one in a new panel → doc element observer catches the reuse case, body observer catches the new panel case
 
 **Two elements with same class**: There are two elements with class `a-b-r-La` inside each document container — a header element and the `<pre>` with actual content. The selector `pre.a-b-r-La` targets only the correct one.
 
 **Security**: All rendered HTML is sanitized through `DOMPurify.sanitize()` before DOM insertion to prevent XSS from malicious markdown content.
 
-**Event triggers (not polling)**: Detection is driven by three events, not continuous polling:
-1. `dblclick` — user opens a file from the file list (300ms debounce)
-2. `navigationChanged` message — SPA navigation detected by the service worker (300ms debounce)
-3. `ArrowLeft`/`ArrowRight` keydown — keyboard navigation in Drive's viewer (600ms debounce, Drive needs time to swap content)
+**Already-rendered check**: Simple DOM test — if the `<pre>` is hidden (`display: none`) and its next sibling is our `.gdmd-markdown-content` wrapper, skip it. No hash tracking needed.

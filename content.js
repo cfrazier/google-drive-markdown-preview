@@ -11,8 +11,7 @@ class GoogleDriveMarkdownPreview {
     this.isEnabled = true;
     this.theme = 'light';
     this.toggleButton = null;
-    this._debounceTimer = null;
-    this._keyboardBound = false;
+    this._bodyObserver = null;
 
     gdmdLog('constructor: initializing');
     this.init();
@@ -43,18 +42,9 @@ class GoogleDriveMarkdownPreview {
   }
 
   setupListeners() {
-    // Trigger 1: Double-click on a file in the file list
-    document.addEventListener('dblclick', () => {
-      gdmdLog('trigger: dblclick');
-      this.scheduleDetection(300);
-    });
-
-    // Trigger 2: SPA navigation detected by the service worker
+    // Settings changes from popup
     chrome.runtime?.onMessage?.addListener((request) => {
-      if (request.action === 'navigationChanged') {
-        gdmdLog('trigger: navigationChanged, url=' + request.url);
-        this.scheduleDetection(300);
-      } else if (request.action === 'settingsChanged') {
+      if (request.action === 'settingsChanged') {
         this.isEnabled = request.settings?.enabled !== false;
         this.theme = request.settings?.theme || 'light';
         gdmdLog('settings changed: enabled=' + this.isEnabled, 'theme=' + this.theme);
@@ -64,76 +54,109 @@ class GoogleDriveMarkdownPreview {
         }
       }
     });
-  }
 
-  // Bind a keyboard listener on the viewer dialog to catch arrow-key navigation.
-  // Called once per dialog element; the listener persists for the dialog's lifetime.
-  bindKeyboardNav(dialog) {
-    if (this._keyboardBound) return;
-    this._keyboardBound = true;
+    // Primary detection: observe the entire document for [role="document"]
+    // elements being added. This catches every way Drive loads file previews —
+    // double-click, keyboard nav, SPA navigation — with zero timeouts.
+    this._bodyObserver = new MutationObserver((mutations) => {
+      if (!this.isEnabled) return;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (this._isOwnElement(node)) continue;
 
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        gdmdLog('trigger: keyboard ' + e.key);
-        // Drive swaps content after the keydown; give it time to update the DOM
-        this.scheduleDetection(600);
+          // Check if the added node is or contains a [role="document"] element.
+          // Don't filter on aria-label here — Drive may set it after insertion.
+          // The .md check happens later in _tryRenderPre.
+          const docs = [];
+          if (node.getAttribute?.('role') === 'document') {
+            docs.push(node);
+          } else if (node.querySelectorAll) {
+            docs.push(...node.querySelectorAll('[role="document"]'));
+          }
+
+          for (const doc of docs) {
+            gdmdLog('trigger: observer saw document element: ' + (doc.getAttribute('aria-label') || '(no label yet)'));
+            this.renderDocElement(doc);
+          }
+        }
       }
     });
+
+    this._bodyObserver.observe(document.body, { childList: true, subtree: true });
+    gdmdLog('observer: watching document.body for new document elements');
   }
 
-  scheduleDetection(delay = 300) {
-    clearTimeout(this._debounceTimer);
-    this._debounceTimer = setTimeout(() => {
-      this._debounceTimer = null;
-      this.tryDetectAndRender();
-    }, delay);
+  _isOwnElement(node) {
+    return node.classList?.contains('gdmd-markdown-content') ||
+           node.classList?.contains('gdmd-toggle-container');
   }
 
-  // Find all unrendered markdown <pre> elements and render them.
-  // Drive caches previous file previews in the DOM, so multiple
-  // [role="document"] elements can coexist. Instead of guessing which
-  // is "current," we render every .md file's <pre> that hasn't already
-  // been rendered.
-  tryDetectAndRender() {
-    if (!this.isEnabled) return;
-    if (!window.location.href.includes('drive.google.com')) return;
+  // Render a specific document element. If the <pre> isn't populated yet,
+  // watch for it to appear. Drive adds the container first, then fills it.
+  // Also keeps a persistent observer for keyboard nav (Drive reuses the
+  // same document element and swaps its children).
+  renderDocElement(docEl) {
+    this._tryRenderPre(docEl);
+    this._watchDocElement(docEl);
+  }
 
-    // Find the viewer dialog and bind keyboard nav if present
-    const viewerDialog = document.querySelector('[role="dialog"][aria-label="Showing viewer."]');
-    if (viewerDialog && viewerDialog.getAttribute('aria-hidden') !== 'true') {
-      this.bindKeyboardNav(viewerDialog);
+  _tryRenderPre(docEl) {
+    const ariaLabel = docEl.getAttribute('aria-label') || '';
+    const mdMatch = ariaLabel.match(/Displaying\s+([^\s]+\.md)/i);
+    if (!mdMatch) return false;
+
+    const pre = docEl.querySelector('pre.a-b-r-La');
+    const textLen = pre ? (pre.textContent?.trim().length || 0) : 0;
+
+    if (!pre || textLen === 0) {
+      gdmdLog('detect: <pre> not ready in "' + mdMatch[1] + '"');
+      return false;
     }
 
-    // Find ALL document elements that are displaying .md files
-    const docElements = document.querySelectorAll('[role="document"][aria-label*="Displaying"]');
-    let rendered = 0;
+    if (pre.style.display === 'none' && pre.nextElementSibling?.classList.contains('gdmd-markdown-content')) {
+      gdmdLog('detect: already rendered "' + mdMatch[1] + '", skipping');
+      return true;
+    }
 
-    for (const docEl of docElements) {
-      const ariaLabel = docEl.getAttribute('aria-label') || '';
-      const mdMatch = ariaLabel.match(/Displaying\s+([^\s]+\.md)/i);
-      if (!mdMatch) continue;
+    gdmdLog('detect: rendering "' + mdMatch[1] + '" (' + textLen + ' chars)');
+    this.renderMarkdown(pre, pre.textContent);
+    return true;
+  }
 
-      // Find the <pre> child with content (skip non-pre elements with same class)
-      const pres = docEl.querySelectorAll('pre.a-b-r-La');
-      for (const pre of pres) {
-        const textLen = pre.textContent?.trim().length || 0;
-        if (textLen === 0) continue;
+  // Persistent observer on a document element. Fires when Drive swaps
+  // children (keyboard nav) or when the <pre> is first populated.
+  _watchDocElement(docEl) {
+    // Don't double-observe the same element
+    if (docEl._gdmdObserved) return;
+    docEl._gdmdObserved = true;
 
-        // Already rendered? Check if our wrapper is the next sibling
-        if (pre.style.display === 'none' && pre.nextElementSibling?.classList.contains('gdmd-markdown-content')) {
-          gdmdLog('detect: already rendered "' + mdMatch[1] + '", skipping');
-          continue;
+    const observer = new MutationObserver((mutations) => {
+      if (!this.isEnabled) return;
+      // Check if any mutation includes a non-own element being added.
+      // If the only changes are our own insertions, skip.
+      let hasExternalChange = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1 && !this._isOwnElement(node)) {
+            hasExternalChange = true;
+            break;
+          }
         }
-
-        gdmdLog('detect: rendering "' + mdMatch[1] + '" (' + textLen + ' chars)');
-        this.renderMarkdown(pre, pre.textContent);
-        rendered++;
+        if (hasExternalChange) break;
+        // Also treat characterData, attribute changes, and removals as external
+        if (m.type === 'characterData' || m.type === 'attributes' || m.removedNodes.length > 0) {
+          hasExternalChange = true;
+          break;
+        }
       }
-    }
+      if (!hasExternalChange) return;
+      gdmdLog('trigger: docElement children changed (' + docEl.getAttribute('aria-label') + ')');
+      this._tryRenderPre(docEl);
+    });
 
-    if (rendered === 0 && docElements.length === 0) {
-      gdmdLog('detect: no .md document elements found');
-    }
+    observer.observe(docEl, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label'] });
+    gdmdLog('observer: watching docElement: ' + docEl.getAttribute('aria-label'));
   }
 
   renderMarkdown(contentEl, rawText) {
