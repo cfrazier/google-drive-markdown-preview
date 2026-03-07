@@ -4,7 +4,17 @@
       "Bash(mkdir:*)",
       "Bash(cp:*)",
       "Bash(git branch:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(shasum -a 256 /Users/chris.frazier.wemakegood.org/Development/google-drive-markdown-preview/lib/marked.min.js)",
+      "WebSearch",
+      "Read(//private/tmp/**)",
+      "Bash(npm pack marked@4.3.0)",
+      "Bash(tar -xzf marked-4.3.0.tgz)",
+      "Bash(shasum -a 256 package/marked.min.js)",
+      "Bash(shasum -a 256 package/lib/marked.min.js)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:gist.github.com)"
     ],
     "deny": [],
     "ask": []

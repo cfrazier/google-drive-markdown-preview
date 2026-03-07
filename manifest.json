@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Google Drive Markdown Preview",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Automatically renders markdown files in Google Drive preview mode",
   
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "webNavigation"
   ],
   
   "host_permissions": [
@@ -16,7 +17,7 @@
   "content_scripts": [
     {
       "matches": ["https://drive.google.com/*"],
-      "js": ["lib/marked.min.js", "content.js"],
+      "js": ["lib/marked.min.js", "lib/purify.min.js", "content.js"],
       "css": ["styles/markdown.css"],
       "run_at": "document_end"
     }

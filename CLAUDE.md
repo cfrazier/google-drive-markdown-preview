@@ -10,53 +10,51 @@ This is a Chrome extension (Manifest V3) - no build commands needed. To develop:
    - Open Chrome → Extensions → Developer mode → "Load unpacked"
    - Select this directory
 2. Test changes: Make code edits, then reload the extension in Chrome
-3. Debug: Use Chrome DevTools console to see `[GDMD]` logs from content.js
+3. Debug: Set `GDMD_DEBUG = true` in content.js, then use Chrome DevTools console to see `[GDMD]` logs
 
 ## Architecture Overview
 
 ### Core Architecture
-This is a Chrome extension that automatically detects and renders markdown files in Google Drive preview mode. The extension uses a sophisticated DOM polling mechanism to handle Google Drive's dynamic content loading.
+This is a Chrome extension that automatically detects and renders markdown files in Google Drive preview mode. It uses event-driven triggers with a simple scan-all-and-render approach to handle Google Drive's dynamic, cached DOM.
 
 ### Key Components
 
 **content.js** - Main content script injected into Google Drive pages
 - `GoogleDriveMarkdownPreview` class handles the entire lifecycle
-- `waitForPreviewElements()` - Critical polling mechanism that waits for Google Drive to inject preview DOM elements
-- `checkForMarkdownPreview()` - Detects markdown files by checking `[role="document"][aria-label*="Displaying"]` elements
-- `findPreviewContent(fileName)` - Locates the specific `.a-b-r-La` element containing markdown content
-- Uses marked.js library for markdown-to-HTML conversion
+- `tryDetectAndRender()` - Scans ALL `[role="document"]` elements for unrendered `.md` previews
+- `renderMarkdown(contentEl, rawText)` - Converts markdown via marked.js and sanitizes with DOMPurify
+- Three event triggers: dblclick, `navigationChanged` message from service worker, ArrowLeft/ArrowRight keydown
+- `scheduleDetection(delay)` - Debounces trigger events before scanning
 
-**background.js** - Service worker for extension lifecycle and settings management
-- Manages chrome.storage.sync for user preferences
-- Handles messages between popup and content scripts
+**background.js** - Service worker for extension lifecycle
+- Detects SPA navigations via `chrome.webNavigation.onHistoryStateUpdated` and notifies content script
+- Deduplicates navigation events per tab with a URL map
+- Manages `chrome.storage.sync` for user preferences (enabled, theme)
+- Relays settings changes to all Drive tabs
 
 **popup.js/popup.html** - Settings UI for enabling/disabling and theme selection
 
-**styles/markdown.css** - GitHub-style markdown rendering with dark theme support
+**styles/markdown.css** - GitHub-style markdown rendering with light/dark theme support
 
 ### Google Drive DOM Structure
-The extension targets this specific DOM pattern that Google Drive injects:
+Drive caches multiple file previews in the DOM simultaneously. The extension targets:
 ```html
-<div class="a-b-r-x" role="document" aria-label="Displaying filename.md">
+<!-- Multiple of these can coexist (cached by Drive) -->
+<div role="document" aria-label="Displaying filename.md">
+  <!-- Two elements share class 'a-b-r-La': a header and the <pre> -->
   <pre class="a-b-r-La"><!-- markdown content --></pre>
 </div>
 ```
 
 ### Critical Implementation Details
 
-**Timing Challenges**: Google Drive injects preview elements asynchronously after user interaction. The extension uses a polling mechanism (`waitForPreviewElements()`) that:
-- Checks every 500ms for up to 10 seconds
-- Waits for both the document container AND the content element
-- Handles multiple files being opened in sequence
+**Render-all strategy**: Drive caches previous file previews in the DOM — old `[role="document"]` elements persist alongside new ones. Rather than trying to identify the "current" file (which is fragile), the extension scans all document elements and renders any `<pre class="a-b-r-La">` that hasn't already been rendered. The "already rendered" check is a simple DOM test: if the `<pre>` is hidden and its next sibling is our `.gdmd-markdown-content` wrapper, it's already done.
 
-**State Management**: Each file opening triggers complete cleanup and reset to handle:
-- Multiple file previews in same session  
-- Reopening the same file
-- Switching between different files
+**Two elements with same class**: There are two elements with class `a-b-r-La` inside each document container — a header element and the `<pre>` with actual content. The selector `pre.a-b-r-La` targets only the correct one.
 
-**File Detection**: Uses multiple methods to identify markdown files:
-1. `aria-label="Displaying filename.md"` pattern (primary)
-2. URL patterns with `/file/d/` 
-3. Content-based detection for markdown patterns
+**Security**: All rendered HTML is sanitized through `DOMPurify.sanitize()` before DOM insertion to prevent XSS from malicious markdown content.
 
-The extension works in both folder view (`/folders/`) and direct file view (`/file/d/`) URLs, as Google Drive can inject previews in either context.
+**Event triggers (not polling)**: Detection is driven by three events, not continuous polling:
+1. `dblclick` — user opens a file from the file list (300ms debounce)
+2. `navigationChanged` message — SPA navigation detected by the service worker (300ms debounce)
+3. `ArrowLeft`/`ArrowRight` keydown — keyboard navigation in Drive's viewer (600ms debounce, Drive needs time to swap content)

@@ -193,64 +193,62 @@
   background: #1446a0;
 }
 
-/* Dark theme support */
-@media (prefers-color-scheme: dark) {
-  .gdmd-markdown-content {
-    background: #1a1a1a;
-    color: #e1e1e1;
-  }
-  
-  .gdmd-markdown-content h1,
-  .gdmd-markdown-content h2,
-  .gdmd-markdown-content h3,
-  .gdmd-markdown-content h4,
-  .gdmd-markdown-content h5,
-  .gdmd-markdown-content h6 {
-    color: #ffffff;
-  }
-  
-  .gdmd-markdown-content h1,
-  .gdmd-markdown-content h2 {
-    border-bottom-color: #30363d;
-  }
-  
-  .gdmd-markdown-content h6 {
-    color: #8b949e;
-  }
-  
-  .gdmd-markdown-content blockquote {
-    color: #8b949e;
-    border-left-color: #30363d;
-  }
-  
-  .gdmd-markdown-content a {
-    color: #58a6ff;
-  }
-  
-  .gdmd-markdown-content code {
-    background-color: rgba(240, 246, 252, 0.15);
-  }
-  
-  .gdmd-markdown-content pre {
-    background-color: #161b22;
-  }
-  
-  .gdmd-markdown-content table th,
-  .gdmd-markdown-content table td {
-    border-color: #30363d;
-  }
-  
-  .gdmd-markdown-content table th {
-    background-color: #161b22;
-  }
-  
-  .gdmd-markdown-content table tr:nth-child(2n) {
-    background-color: #0d1117;
-  }
-  
-  .gdmd-markdown-content hr {
-    background: #30363d;
-  }
+/* Dark theme support — activated by explicit user preference (class) or OS preference (media query) */
+.gdmd-markdown-content.gdmd-dark {
+  background: #1a1a1a;
+  color: #e1e1e1;
+}
+
+.gdmd-markdown-content.gdmd-dark h1,
+.gdmd-markdown-content.gdmd-dark h2,
+.gdmd-markdown-content.gdmd-dark h3,
+.gdmd-markdown-content.gdmd-dark h4,
+.gdmd-markdown-content.gdmd-dark h5,
+.gdmd-markdown-content.gdmd-dark h6 {
+  color: #ffffff;
+}
+
+.gdmd-markdown-content.gdmd-dark h1,
+.gdmd-markdown-content.gdmd-dark h2 {
+  border-bottom-color: #30363d;
+}
+
+.gdmd-markdown-content.gdmd-dark h6 {
+  color: #8b949e;
+}
+
+.gdmd-markdown-content.gdmd-dark blockquote {
+  color: #8b949e;
+  border-left-color: #30363d;
+}
+
+.gdmd-markdown-content.gdmd-dark a {
+  color: #58a6ff;
+}
+
+.gdmd-markdown-content.gdmd-dark code {
+  background-color: rgba(240, 246, 252, 0.15);
+}
+
+.gdmd-markdown-content.gdmd-dark pre {
+  background-color: #161b22;
+}
+
+.gdmd-markdown-content.gdmd-dark table th,
+.gdmd-markdown-content.gdmd-dark table td {
+  border-color: #30363d;
+}
+
+.gdmd-markdown-content.gdmd-dark table th {
+  background-color: #161b22;
+}
+
+.gdmd-markdown-content.gdmd-dark table tr:nth-child(2n) {
+  background-color: #0d1117;
+}
+
+.gdmd-markdown-content.gdmd-dark hr {
+  background: #30363d;
 }
 
 /* Responsive design */

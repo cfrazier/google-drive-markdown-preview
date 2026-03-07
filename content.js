@@ -1,416 +1,203 @@
+const GDMD_DEBUG = false;
+
+function gdmdLog(...args) {
+  if (GDMD_DEBUG) {
+    console.log('[GDMD]', ...args);
+  }
+}
+
 class GoogleDriveMarkdownPreview {
   constructor() {
     this.isEnabled = true;
-    this.originalContent = null;
-    this.renderedContent = null;
+    this.theme = 'light';
     this.toggleButton = null;
-    this.isRendered = false;
-    this.observer = null;
-    
+    this._debounceTimer = null;
+    this._keyboardBound = false;
+
+    gdmdLog('constructor: initializing');
     this.init();
   }
-  
+
   async init() {
     await this.loadSettings();
-    this.setupObserver();
+    this.setupListeners();
+    gdmdLog('init: ready, enabled=' + this.isEnabled, 'theme=' + this.theme);
   }
-  
+
   async loadSettings() {
     try {
-      const result = await chrome.storage.sync.get(['enabled']);
-      this.isEnabled = result.enabled !== false; // default to true
+      const result = await chrome.storage.sync.get(['enabled', 'theme']);
+      this.isEnabled = result.enabled !== false;
+      this.theme = result.theme || 'light';
     } catch (error) {
       this.isEnabled = true;
+      this.theme = 'light';
     }
   }
-  
-  setupObserver() {
-    document.addEventListener('dblclick', (event) => {
-      const target = event.target;
-      
-      let element = target;
-      let isFileElement = false;
-      for (let i = 0; i < 5 && element; i++) {
-        const elementText = element.textContent || '';
-        const ariaLabel = element.getAttribute('aria-label') || '';
-        const title = element.getAttribute('title') || '';
-        
-        if (elementText.includes('.md') || ariaLabel.includes('.md') || title.includes('.md')) {
-          isFileElement = true;
-          break;
+
+  applyTheme() {
+    const wrapper = document.querySelector('.gdmd-markdown-content');
+    if (wrapper) {
+      wrapper.classList.toggle('gdmd-dark', this.theme === 'dark');
+    }
+  }
+
+  setupListeners() {
+    // Trigger 1: Double-click on a file in the file list
+    document.addEventListener('dblclick', () => {
+      gdmdLog('trigger: dblclick');
+      this.scheduleDetection(300);
+    });
+
+    // Trigger 2: SPA navigation detected by the service worker
+    chrome.runtime?.onMessage?.addListener((request) => {
+      if (request.action === 'navigationChanged') {
+        gdmdLog('trigger: navigationChanged, url=' + request.url);
+        this.scheduleDetection(300);
+      } else if (request.action === 'settingsChanged') {
+        this.isEnabled = request.settings?.enabled !== false;
+        this.theme = request.settings?.theme || 'light';
+        gdmdLog('settings changed: enabled=' + this.isEnabled, 'theme=' + this.theme);
+        this.applyTheme();
+        if (!this.isEnabled) {
+          this.cleanup();
         }
-        element = element.parentElement;
-      }
-      
-      if (!isFileElement && window.location.href.includes('drive.google.com')) {
-        setTimeout(() => this.waitForPreviewElements(), 100);
-      } else if (isFileElement) {
-        this.waitForPreviewElements();
       }
     });
-    
-    let lastUrl = window.location.href;
-    const urlObserver = new MutationObserver(() => {
-      const currentUrl = window.location.href;
-      if (currentUrl !== lastUrl && currentUrl.includes('/file/d/')) {
-        lastUrl = currentUrl;
-        this.waitForPreviewElements();
+  }
+
+  // Bind a keyboard listener on the viewer dialog to catch arrow-key navigation.
+  // Called once per dialog element; the listener persists for the dialog's lifetime.
+  bindKeyboardNav(dialog) {
+    if (this._keyboardBound) return;
+    this._keyboardBound = true;
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        gdmdLog('trigger: keyboard ' + e.key);
+        // Drive swaps content after the keydown; give it time to update the DOM
+        this.scheduleDetection(600);
       }
     });
-    
-    urlObserver.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-    
-    this.observer = urlObserver;
   }
-  
-  waitForPreviewElements() {
-    let attempts = 0;
-    const maxAttempts = 15;
-    
-    const checkForElements = () => {
-      attempts++;
-      
-      const documentElement = document.querySelector('[role="document"][aria-label*="Displaying"]');
-      const contentElement = document.querySelector('.a-b-r-La');
-      
-      if (documentElement && contentElement && contentElement.textContent?.trim()) {
-        this.checkForMarkdownPreview();
-        return;
-      }
-      
-      if (attempts < maxAttempts) {
-        setTimeout(checkForElements, 400);
-      } else {
-        this.checkForMarkdownPreview();
-      }
-    };
-    
-    checkForElements();
+
+  scheduleDetection(delay = 300) {
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = setTimeout(() => {
+      this._debounceTimer = null;
+      this.tryDetectAndRender();
+    }, delay);
   }
-  
-  checkForMarkdownPreview() {
-    if (!this.isEnabled) {
-      return;
+
+  // Find all unrendered markdown <pre> elements and render them.
+  // Drive caches previous file previews in the DOM, so multiple
+  // [role="document"] elements can coexist. Instead of guessing which
+  // is "current," we render every .md file's <pre> that hasn't already
+  // been rendered.
+  tryDetectAndRender() {
+    if (!this.isEnabled) return;
+    if (!window.location.href.includes('drive.google.com')) return;
+
+    // Find the viewer dialog and bind keyboard nav if present
+    const viewerDialog = document.querySelector('[role="dialog"][aria-label="Showing viewer."]');
+    if (viewerDialog && viewerDialog.getAttribute('aria-hidden') !== 'true') {
+      this.bindKeyboardNav(viewerDialog);
     }
-    
-    // Reset state for new file
-    this.cleanup();
-    this.isRendered = false;
-    this.originalContent = null;
-    this.renderedContent = null;
-    this.toggleButton = null;
-    
-    // Check if we're in a Google Drive preview mode
-    const url = window.location.href;
-    
-    if (!url.includes('drive.google.com')) {
-      return;
-    }
-    
-    // Look for markdown file indicators - try multiple approaches
-    let fileName = '';
-    
-    const documentElements = document.querySelectorAll('[role="document"][aria-label*="Displaying"]');
-    
-    for (const element of documentElements) {
-      const ariaLabel = element.getAttribute('aria-label') || '';
-      const match = ariaLabel.match(/Displaying\s+([^\/\s]+\.md)/i);
-      if (match) {
-        fileName = match[1];
-        break;
-      }
-    }
-    
-    if (!fileName) {
-      const ariaLabelElements = document.querySelectorAll('[aria-label*=".md"]');
-      
-      for (const element of ariaLabelElements) {
-        const ariaLabel = element.getAttribute('aria-label') || '';
-        const match = ariaLabel.match(/([^\/\s]+\.md)/i);
-        if (match) {
-          fileName = match[1];
-          break;
+
+    // Find ALL document elements that are displaying .md files
+    const docElements = document.querySelectorAll('[role="document"][aria-label*="Displaying"]');
+    let rendered = 0;
+
+    for (const docEl of docElements) {
+      const ariaLabel = docEl.getAttribute('aria-label') || '';
+      const mdMatch = ariaLabel.match(/Displaying\s+([^\s]+\.md)/i);
+      if (!mdMatch) continue;
+
+      // Find the <pre> child with content (skip non-pre elements with same class)
+      const pres = docEl.querySelectorAll('pre.a-b-r-La');
+      for (const pre of pres) {
+        const textLen = pre.textContent?.trim().length || 0;
+        if (textLen === 0) continue;
+
+        // Already rendered? Check if our wrapper is the next sibling
+        if (pre.style.display === 'none' && pre.nextElementSibling?.classList.contains('gdmd-markdown-content')) {
+          gdmdLog('detect: already rendered "' + mdMatch[1] + '", skipping');
+          continue;
         }
+
+        gdmdLog('detect: rendering "' + mdMatch[1] + '" (' + textLen + ' chars)');
+        this.renderMarkdown(pre, pre.textContent);
+        rendered++;
       }
     }
-    
-    if (!fileName && url.includes('/file/d/')) {
-      
-      const fileNameSelectors = [
-        '[data-target="doc-title"] input',
-        '[title*=".md"]',
-        '.ndfHFb-c4YZDc-title',
-        '.ndfHFb-c4YZDc-Wrql6b-title',
-        '[role="heading"]'
-      ];
-      
-      for (const selector of fileNameSelectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          const text = element.value || element.textContent || element.getAttribute('aria-label') || element.getAttribute('title') || '';
-          if (text.toLowerCase().includes('.md')) {
-            fileName = text.trim();
-            break;
-          }
-        }
-      }
-    }
-    
-    
-    // Method 2: Check document title input (legacy)
-    if (!fileName) {
-      const titleElement = document.querySelector('[data-target="doc-title"] input');
-      if (titleElement) {
-        fileName = titleElement.value || '';
-      }
-    }
-    
-    // Method 3: Check page title
-    if (!fileName) {
-      fileName = document.title;
-    }
-    
-    // Method 4: Check for .md in URL
-    const urlMatch = url.match(/([^/]+\.md)/);
-    if (urlMatch) {
-      fileName = urlMatch[1];
-    }
-    
-    // Method 5: Check for README.md in folder view
-    // Google Drive automatically displays README.md files in folder views
-    if (!fileName && url.includes('/folders/')) {
-      // Look for README.md indicators in the DOM
-      const readmeIndicators = document.querySelectorAll('[title*="README.md"], [aria-label*="README.md"], [data-tooltip*="README.md"]');
-      if (readmeIndicators.length > 0) {
-        fileName = 'README.md';
-      } else {
-        // Also check for any visible text that might indicate a README
-        const allText = document.body.textContent || '';
-        if (allText.includes('README.md') && this.findPreviewContent()) {
-          fileName = 'README.md';
-        }
-      }
-    }
-    
-    // Method 6: Check if the document title looks like a markdown heading
-    // Google Drive often shows the first line of content as the page title
-    if (!fileName.toLowerCase().includes('.md') && url.includes('/file/d/')) {
-      const title = document.title;
-      // Check if title looks like it could be from a markdown file
-      // (Google Drive strips the # but shows the heading text)
-      const potentialContent = this.findPreviewContent();
-      if (potentialContent) {
-        const text = potentialContent.textContent || '';
-        // If we find the title text in content with markdown patterns around it
-        if (title && title !== 'Google Drive' && (
-            text.includes(`# ${title}`) || 
-            text.includes(`## ${title}`) ||
-            text.includes('# ') || text.includes('## ') || text.includes('```') || 
-            text.includes('**') || text.includes('- ') || text.includes('* ')
-          )) {
-          fileName = 'markdown-file.md'; // Force detection
-        }
-      } else {
-        // Even without content, if title looks like a heading and we're in file preview
-        if (title && title !== 'Google Drive' && !title.includes(' - Google Drive') && 
-            title.length > 3 && title.length < 100) {
-          fileName = 'markdown-file.md'; // Force detection based on title pattern
-        }
-      }
-    }
-    
-    if (!fileName.toLowerCase().includes('.md')) {
-      return;
-    }
-    
-    
-    // Find the preview content area that matches the detected filename
-    const previewContent = this.findPreviewContent(fileName);
-    if (previewContent) {
-      this.processMarkdownContent(previewContent);
-    } else {
+
+    if (rendered === 0 && docElements.length === 0) {
+      gdmdLog('detect: no .md document elements found');
     }
   }
-  
-  findPreviewContent(fileName) {
-    
-    // First, find the specific document element for this filename
-    let targetDocumentElement = null;
-    const documentElements = document.querySelectorAll('[role="document"][aria-label*="Displaying"]');
-    
-    for (const element of documentElements) {
-      const ariaLabel = element.getAttribute('aria-label') || '';
-      if (ariaLabel.includes(fileName)) {
-        targetDocumentElement = element;
-        break;
-      }
-    }
-    
-    if (targetDocumentElement) {
-      // Look for content within this specific document element
-      const contentElement = targetDocumentElement.querySelector('.a-b-r-La');
-      if (contentElement) {
-        const text = contentElement.textContent?.trim();
-        if (text && text.length > 0) {
-          return contentElement;
-        }
-      }
-    }
-    
-    // Fallback to original logic if specific matching fails
-    const selectors = [
-      // Google Drive preview specific selectors (based on actual DOM)
-      '.a-b-r-La',  // The specific class for preview content
-      '[role="document"] pre',
-      '[aria-label*="Displaying"] pre',
-      // Modern Google Drive selectors
-      '[role="main"] pre',
-      '[role="main"] .ndfHFb-c4YZDc',
-      '.ndfHFb-c4YZDc-Wrql6b',
-      '.ndfHFb-c4YZDc-cYSp0e', 
-      '.ndfHFb-c4YZDc-PLDbbf',
-      '[data-target="doc"] pre',
-      '[data-target="doc"]',
-      // Generic fallbacks
-      'pre',
-      '.content pre',
-      '#drive_main-content pre',
-      // Text content divs
-      '[role="main"] div[style*="white-space: pre"]',
-      '[role="main"] div[style*="font-family: monospace"]'
-    ];
-    
-    for (const selector of selectors) {
-      const elements = document.querySelectorAll(selector);
-      
-      for (const element of elements) {
-        const text = element.textContent?.trim();
-        if (text && text.length > 0) {
-          return element;
-        }
-      }
-    }
-    
-    return null;
-  }
-  
-  processMarkdownContent(contentElement) {
-    // Check if this element has already been processed
-    if (contentElement.parentNode.querySelector('.gdmd-markdown-content')) {
+
+  renderMarkdown(contentEl, rawText) {
+    if (!rawText.trim()) {
+      gdmdLog('render: empty content, skipping');
       return;
     }
-    
-    this.originalContent = contentElement.textContent;
-    
-    
-    if (!this.originalContent.trim()) {
-      return;
-    }
-    
-    // Render markdown to HTML
+
     try {
-      this.renderedContent = marked.parse(this.originalContent, {
-        gfm: true,
-        breaks: true,
-        sanitize: false,
-        highlight: function(code, language) {
-          return code; // Basic highlighting placeholder
-        }
-      });
-      
-      
-      this.replaceContent(contentElement);
-      this.addToggleButton(contentElement);
-      this.isRendered = true;
-      
-      
+      const rawHTML = marked.parse(rawText, { gfm: true, breaks: true });
+      const safeHTML = DOMPurify.sanitize(rawHTML);
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'gdmd-markdown-content';
+      if (this.theme === 'dark') wrapper.classList.add('gdmd-dark');
+      wrapper.innerHTML = safeHTML;
+
+      contentEl.style.display = 'none';
+      contentEl.parentNode.insertBefore(wrapper, contentEl.nextSibling);
+
+      this.addToggleButton(contentEl);
+      gdmdLog('render: SUCCESS — ' + rawText.length + ' chars');
     } catch (error) {
-      // Error rendering markdown, fail silently
+      gdmdLog('render: ERROR —', error.message);
     }
   }
-  
-  replaceContent(contentElement) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'gdmd-markdown-content';
-    wrapper.innerHTML = this.renderedContent;
-    
-    // Hide original content but keep it for toggling
-    contentElement.style.display = 'none';
-    
-    // Insert rendered content after the original
-    contentElement.parentNode.insertBefore(wrapper, contentElement.nextSibling);
-  }
-  
-  addToggleButton(contentElement) {
-    const buttonContainer = document.createElement('div');
-    buttonContainer.className = 'gdmd-toggle-container';
-    
+
+  addToggleButton(contentEl) {
+    const container = document.createElement('div');
+    container.className = 'gdmd-toggle-container';
+
     this.toggleButton = document.createElement('button');
     this.toggleButton.className = 'gdmd-toggle-button';
     this.toggleButton.textContent = 'Show Raw';
     this.toggleButton.title = 'Toggle between rendered and raw markdown';
-    
+
     this.toggleButton.addEventListener('click', () => {
-      this.toggleView(contentElement);
+      const rendered = contentEl.nextSibling;
+      if (contentEl.style.display === 'none') {
+        contentEl.style.display = 'block';
+        if (rendered) rendered.style.display = 'none';
+        this.toggleButton.textContent = 'Show Rendered';
+      } else {
+        contentEl.style.display = 'none';
+        if (rendered) rendered.style.display = 'block';
+        this.toggleButton.textContent = 'Show Raw';
+      }
     });
-    
-    buttonContainer.appendChild(this.toggleButton);
-    
-    // Insert toggle button before the content
-    contentElement.parentNode.insertBefore(buttonContainer, contentElement);
+
+    container.appendChild(this.toggleButton);
+    contentEl.parentNode.insertBefore(container, contentEl);
   }
-  
-  toggleView(contentElement) {
-    const renderedElement = contentElement.nextSibling;
-    
-    if (contentElement.style.display === 'none') {
-      // Show raw markdown
-      contentElement.style.display = 'block';
-      if (renderedElement) {
-        renderedElement.style.display = 'none';
-      }
-      this.toggleButton.textContent = 'Show Rendered';
-    } else {
-      // Show rendered markdown
-      contentElement.style.display = 'none';
-      if (renderedElement) {
-        renderedElement.style.display = 'block';
-      }
-      this.toggleButton.textContent = 'Show Raw';
-    }
-  }
-  
+
   cleanup() {
-    // Clean up any existing rendered content
-    const existingToggleContainers = document.querySelectorAll('.gdmd-toggle-container');
-    const existingMarkdownContent = document.querySelectorAll('.gdmd-markdown-content');
-    
-    existingToggleContainers.forEach(container => container.remove());
-    existingMarkdownContent.forEach(content => content.remove());
-    
-    // Restore any hidden original content
-    const hiddenElements = document.querySelectorAll('pre[style*="display: none"], .a-b-r-La[style*="display: none"]');
-    hiddenElements.forEach(element => {
-      element.style.display = '';
-    });
+    document.querySelectorAll('.gdmd-toggle-container').forEach(el => el.remove());
+    document.querySelectorAll('.gdmd-markdown-content').forEach(el => el.remove());
+    document.querySelectorAll('pre[style*="display: none"], .a-b-r-La[style*="display: none"]')
+      .forEach(el => { el.style.display = ''; });
   }
+
 }
 
-// Initialize the extension when the page loads
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    new GoogleDriveMarkdownPreview();
-  });
+  document.addEventListener('DOMContentLoaded', () => new GoogleDriveMarkdownPreview());
 } else {
   new GoogleDriveMarkdownPreview();
 }
-
-// Listen for settings changes
-chrome.runtime?.onMessage?.addListener((request, sender, sendResponse) => {
-  if (request.action === 'settingsChanged') {
-    location.reload();
-  }
-});
