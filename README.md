@@ -56,7 +56,7 @@ Click the extension icon in your toolbar to access:
 - **Manifest Version**: 3 (latest Chrome extension standard)
 - **Permissions**: Only requires access to Google Drive pages
 - **Privacy**: No data collection - all processing happens locally
-- **Performance**: Optimized polling mechanism for responsive detection
+- **Performance**: Event-driven MutationObserver architecture — zero polling, zero timeouts
 - **Compatibility**: Works with all Chromium-based browsers (Chrome, Edge, Brave, etc.)
 
 ## Development
@@ -106,6 +106,12 @@ For development setup and architecture details, see [CLAUDE.md](CLAUDE.md).
 **Performance issues?**
 - Disable other Chrome extensions temporarily to test
 - Clear browser cache and cookies for Google Drive
+
+## Credits
+
+- Markdown icon by [Font Awesome](https://fontawesome.com) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/))
+- Markdown parsing by [marked.js](https://github.com/markedjs/marked) (MIT)
+- HTML sanitization by [DOMPurify](https://github.com/cure53/DOMPurify) (Apache 2.0 / MPL 2.0)
 
 ## License
 
