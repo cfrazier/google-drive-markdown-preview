@@ -40,10 +40,15 @@ Drive caches multiple file previews in the DOM simultaneously. The extension tar
 ```html
 <!-- Multiple of these can coexist (cached by Drive) -->
 <div role="document" aria-label="Displaying filename.md">
-  <!-- Two elements share class 'a-b-r-La': a header and the <pre> -->
-  <pre class="a-b-r-La"><!-- markdown content --></pre>
+  <!-- The <pre> holds the markdown. Drive uses different obfuscated class
+       names on different routes (e.g., a-b-r-La on /drive/home, and
+       ndfHFb-c4YZDc-fmcmS-DARUcf on /file/d/.../view) and rotates them
+       over time. The extension matches by structure, not class. -->
+  <pre><!-- markdown content --></pre>
 </div>
 ```
+
+The extension is also injected on `studio.workspace.google.com` (where Drive embeds previews from Workspace) with `all_frames: true`, so the content script reaches the preview frame regardless of how Drive wraps it.
 
 ### Critical Implementation Details
 
@@ -55,14 +60,30 @@ Drive caches multiple file previews in the DOM simultaneously. The extension tar
    - Drive sets/changes the `aria-label` attribute (catches deferred label assignment)
    - Drive adds the `<pre>` child (catches deferred content population)
    - Drive swaps children on keyboard navigation (catches file switching in an existing container)
-   - Filters out mutations caused by our own DOM insertions (`.gdmd-markdown-content`, `.gdmd-toggle-container`)
+   - Skips mutations whose target is inside our injected DOM (`.gdmd-markdown-content`, `.gdmd-toggle-container`) — see `_isInsideOwnDom`. Without this, the toggle button's text change ("Show Raw" ↔ "Show Rendered") would fire the observer and trigger a re-render on every click.
 
 **Why two levels**: Drive uses two different patterns depending on how the user navigates:
 - **Double-click**: Creates a new `[role="document"]` element → body observer catches it
 - **Keyboard nav (arrow keys)**: Sometimes reuses an existing document element and swaps its children, sometimes creates a new one in a new panel → doc element observer catches the reuse case, body observer catches the new panel case
 
-**Two elements with same class**: There are two elements with class `a-b-r-La` inside each document container — a header element and the `<pre>` with actual content. The selector `pre.a-b-r-La` targets only the correct one.
+**Structural `<pre>` matching**: `_tryRenderPre` picks the largest `<pre>` inside the document container by text length. This survives Drive's class-name rotations and incidentally skips any header-style `<pre>` that might share the container.
+
+**Filename regex**: The `aria-label` match is `/Displaying\s+(.+\.md)$/i`. The `.+` (not `[^\s]+`) is required so filenames with spaces match — e.g., `Displaying UFC - Ultimate Fighting Championship.md`.
 
 **Security**: All rendered HTML is sanitized through `DOMPurify.sanitize()` before DOM insertion to prevent XSS from malicious markdown content.
 
-**Already-rendered check**: Simple DOM test — if the `<pre>` is hidden (`display: none`) and its next sibling is our `.gdmd-markdown-content` wrapper, skip it. No hash tracking needed.
+**Already-rendered check**: A `<pre>` is considered already rendered if any sibling has the `.gdmd-markdown-content` class. The check does not depend on the `<pre>`'s `display` state — the user may have toggled to "Show Raw," which makes the `<pre>` visible, but we still don't want to re-render.
+
+## Releases
+
+Releases are tag-driven via `.github/workflows/release.yml`. To cut a release:
+
+1. Bump `version` in `manifest.json` to the new semver (e.g., `1.3.1`)
+2. Commit the bump
+3. Tag with a matching `v` prefix and push:
+   ```bash
+   git tag v1.3.1
+   git push origin main v1.3.1
+   ```
+
+The workflow verifies the tag matches `manifest.json` (fails fast if not), builds a zip excluding repo-only files (`.git`, `.github`, `CLAUDE.md`, `README.md`), and creates a GitHub Release with auto-generated notes. Edit the release in the browser if you want to add prose.
