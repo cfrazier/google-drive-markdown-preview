@@ -92,6 +92,18 @@ class GoogleDriveMarkdownPreview {
            node.classList?.contains('gdmd-toggle-container');
   }
 
+  _isInsideOwnDom(node) {
+    // True if node is, or is contained within, one of our injected elements.
+    // Mutations inside our DOM (e.g. toggle button text changes) must not
+    // trigger re-renders. Text nodes have no .closest(), so walk up manually.
+    let el = node?.nodeType === 1 ? node : node?.parentElement;
+    while (el) {
+      if (this._isOwnElement(el)) return true;
+      el = el.parentElement;
+    }
+    return false;
+  }
+
   // Render a specific document element. If the <pre> isn't populated yet,
   // watch for it to appear. Drive adds the container first, then fills it.
   // Also keeps a persistent observer for keyboard nav (Drive reuses the
@@ -124,7 +136,11 @@ class GoogleDriveMarkdownPreview {
       return false;
     }
 
-    if (pre.style.display === 'none' && pre.nextElementSibling?.classList.contains('gdmd-markdown-content')) {
+    // Already-rendered check: look for our wrapper as a sibling regardless of
+    // the <pre>'s display state. The user may have toggled to "Show Raw",
+    // which makes the <pre> visible — we still don't want to re-render.
+    const siblings = pre.parentNode ? Array.from(pre.parentNode.children) : [];
+    if (siblings.some(el => el.classList?.contains('gdmd-markdown-content'))) {
       gdmdLog('detect: already rendered "' + mdMatch[1] + '", skipping');
       return true;
     }
@@ -141,10 +157,14 @@ class GoogleDriveMarkdownPreview {
 
     const observer = new MutationObserver((mutations) => {
       if (!this.isEnabled) return;
-      // Check if any mutation includes a non-own element being added.
-      // If the only changes are our own insertions, skip.
+      // Skip mutations that originate inside our own DOM. The toggle button's
+      // text changes (Show Raw ↔ Show Rendered) are characterData mutations
+      // on a text node inside .gdmd-toggle-container, which lives in docEl's
+      // subtree. Without this guard, every toggle click triggers a re-render.
       let hasExternalChange = false;
       for (const m of mutations) {
+        if (this._isInsideOwnDom(m.target)) continue;
+
         for (const node of m.addedNodes) {
           if (node.nodeType === 1 && !this._isOwnElement(node)) {
             hasExternalChange = true;
@@ -152,7 +172,6 @@ class GoogleDriveMarkdownPreview {
           }
         }
         if (hasExternalChange) break;
-        // Also treat characterData, attribute changes, and removals as external
         if (m.type === 'characterData' || m.type === 'attributes' || m.removedNodes.length > 0) {
           hasExternalChange = true;
           break;
@@ -203,7 +222,11 @@ class GoogleDriveMarkdownPreview {
     toggleButton.title = 'Toggle between rendered and raw markdown';
 
     toggleButton.addEventListener('click', () => {
-      const rendered = contentEl.nextSibling;
+      // Find our rendered wrapper among the <pre>'s siblings. Don't rely on
+      // nextSibling — it can return whitespace text nodes — and don't rely
+      // on positioning since other code may insert things between.
+      const siblings = contentEl.parentNode ? Array.from(contentEl.parentNode.children) : [];
+      const rendered = siblings.find(el => el.classList?.contains('gdmd-markdown-content'));
       if (contentEl.style.display === 'none') {
         contentEl.style.display = 'block';
         if (rendered) rendered.style.display = 'none';
