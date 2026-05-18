@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches manifest version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(jq -r .version manifest.json)
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag v$tag does not match manifest.json version $manifest"
+            echo "Bump manifest.json's version to $tag, commit, then re-tag."
+            exit 1
+          fi
+          echo "Version $tag matches manifest."
+
+      - name: Build extension zip
+        run: |
+          name="google-drive-markdown-preview-${GITHUB_REF_NAME}.zip"
+          zip -r "$name" . \
+            -x '.git/*' \
+            -x '.github/*' \
+            -x '.gitignore' \
+            -x 'CLAUDE.md' \
+            -x 'README.md' \
+            -x '*.zip' \
+            -x 'Screenshot*'
+          echo "ARTIFACT=$name" >> "$GITHUB_ENV"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ARTIFACT" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
