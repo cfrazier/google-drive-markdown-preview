@@ -103,11 +103,21 @@ class GoogleDriveMarkdownPreview {
 
   _tryRenderPre(docEl) {
     const ariaLabel = docEl.getAttribute('aria-label') || '';
-    const mdMatch = ariaLabel.match(/Displaying\s+([^\s]+\.md)/i);
+    const mdMatch = ariaLabel.match(/Displaying\s+(.+\.md)$/i);
     if (!mdMatch) return false;
 
-    const pre = docEl.querySelector('pre.a-b-r-La');
-    const textLen = pre ? (pre.textContent?.trim().length || 0) : 0;
+    // Match by structure rather than class: Drive uses different obfuscated
+    // class names on different routes (e.g., a-b-r-La on /drive/home vs.
+    // ndfHFb-c4YZDc-fmcmS-DARUcf on /file/d/.../view) and rotates them over
+    // time. Picking the largest <pre> reliably skips any header-style <pre>
+    // that may share the container.
+    const pres = Array.from(docEl.querySelectorAll('pre'));
+    let pre = null;
+    let textLen = 0;
+    for (const candidate of pres) {
+      const len = candidate.textContent?.trim().length || 0;
+      if (len > textLen) { pre = candidate; textLen = len; }
+    }
 
     if (!pre || textLen === 0) {
       gdmdLog('detect: <pre> not ready in "' + mdMatch[1] + '"');
@@ -215,7 +225,7 @@ class GoogleDriveMarkdownPreview {
 
     document.querySelectorAll('.gdmd-toggle-container').forEach(el => el.remove());
     document.querySelectorAll('.gdmd-markdown-content').forEach(el => el.remove());
-    document.querySelectorAll('pre[style*="display: none"], .a-b-r-La[style*="display: none"]')
+    document.querySelectorAll('pre[style*="display: none"]')
       .forEach(el => { el.style.display = ''; });
   }
 

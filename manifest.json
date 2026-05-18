@@ -11,15 +11,20 @@
   ],
   
   "host_permissions": [
-    "https://drive.google.com/*"
+    "https://drive.google.com/*",
+    "https://studio.workspace.google.com/*"
   ],
-  
+
   "content_scripts": [
     {
-      "matches": ["https://drive.google.com/*"],
+      "matches": [
+        "https://drive.google.com/*",
+        "https://studio.workspace.google.com/*"
+      ],
       "js": ["lib/marked.min.js", "lib/purify.min.js", "content.js"],
       "css": ["styles/markdown.css"],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true
     }
   ],
   
@@ -42,7 +47,10 @@
   "web_accessible_resources": [
     {
       "resources": ["styles/markdown.css"],
-      "matches": ["https://drive.google.com/*"]
+      "matches": [
+        "https://drive.google.com/*",
+        "https://studio.workspace.google.com/*"
+      ]
     }
   ]
 }
