@@ -1,2 +1,7 @@
 .claude/settings.local.json
 .DS_Store
+
+# Local-only screenshot working files
+screenshots-final/
+Campaigns-MG-Client-Services-Google-Drive-*.jpg
+Screenshot*
