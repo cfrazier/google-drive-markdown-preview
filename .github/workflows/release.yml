@@ -34,6 +34,8 @@ jobs:
             -x '.gitignore' \
             -x 'CLAUDE.md' \
             -x 'README.md' \
+            -x 'STORE_LISTING.md' \
+            -x 'docs/*' \
             -x '*.zip' \
             -x 'Screenshot*'
           echo "ARTIFACT=$name" >> "$GITHUB_ENV"
