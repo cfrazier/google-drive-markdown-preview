@@ -23,7 +23,8 @@ This is a Chrome extension that automatically detects and renders markdown files
 - `GoogleDriveMarkdownPreview` class handles the entire lifecycle
 - Two-level observer architecture (see below)
 - `_tryRenderPre(docEl)` - Checks a document element for an unrendered `.md` `<pre>` and renders it
-- `renderMarkdown(contentEl, rawText)` - Converts markdown via marked.js and sanitizes with DOMPurify
+- `renderMarkdown(contentEl, rawText, filename)` - Converts markdown via marked.js and sanitizes with DOMPurify
+- `printRendered(rendered, filename)` - Prints the rendered markdown (see Print below)
 
 **background.js** - Service worker for extension lifecycle
 - Detects SPA navigations via `chrome.webNavigation.onHistoryStateUpdated` and notifies content script
@@ -73,6 +74,12 @@ The extension is also injected on `studio.workspace.google.com` (where Drive emb
 **Security**: All rendered HTML is sanitized through `DOMPurify.sanitize()` before DOM insertion to prevent XSS from malicious markdown content.
 
 **Already-rendered check**: A `<pre>` is considered already rendered if any sibling has the `.gdmd-markdown-content` class. The check does not depend on the `<pre>`'s `display` state — the user may have toggled to "Show Raw," which makes the `<pre>` visible, but we still don't want to re-render.
+
+**Print (`printRendered`)**: Chrome's native print inside a Drive preview prints the raw `<pre>` wrapped in Drive's chrome, not our rendered output. Rather than fight Drive's layout with `@media print` rules (unreliable — Drive rotates class names and nests preview frames, so hiding "everything but our div" in place isn't feasible), the Print button opens a fresh `window.open('', '_blank')` we fully control, writes a self-contained document (inlined light-theme CSS from `printStyles()` + the rendered HTML + the filename as the title), and calls `print()` on that window. Notes:
+- `window.open` runs synchronously inside the button's click handler so it isn't treated as an unsolicited popup.
+- The rendered node is cloned and its `<img>` `src`s are resolved to absolute URLs (`new URL(src, location.href)`) — relative srcs wouldn't load in the new window's origin.
+- Print output is always light theme regardless of the user's theme setting; `printStyles()` defines no `.gdmd-dark` rules, so a cloned dark wrapper still renders light.
+- The Print and toggle buttons share `.gdmd-toggle-button`; they're spaced with a `.gdmd-toggle-button + .gdmd-toggle-button` sibling margin.
 
 ## Releases
 
