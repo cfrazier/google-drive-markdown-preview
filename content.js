@@ -114,9 +114,17 @@ class GoogleDriveMarkdownPreview {
   }
 
   _tryRenderPre(docEl) {
+    // Drive localizes the label ("Displaying foo.md" in English; other
+    // languages change the wording and word order), so detect by extension
+    // alone. The (?![\w.]) guard rejects names like "foo.md.pdf". Requiring a
+    // non-empty <pre> below keeps this safe: Drive only previews text files
+    // that way.
     const ariaLabel = docEl.getAttribute('aria-label') || '';
-    const mdMatch = ariaLabel.match(/Displaying\s+(.+\.md)$/i);
-    if (!mdMatch) return false;
+    if (!/\.md(?![\w.])/i.test(ariaLabel)) return false;
+    // The filename is only used for logs and the print title. Strip the
+    // English prefix when present; in other locales fall back to the full label.
+    const englishMatch = ariaLabel.match(/Displaying\s+(.+\.md)$/i);
+    const filename = englishMatch ? englishMatch[1] : ariaLabel;
 
     // Match by structure rather than class: Drive uses different obfuscated
     // class names on different routes (e.g., a-b-r-La on /drive/home vs.
@@ -132,7 +140,7 @@ class GoogleDriveMarkdownPreview {
     }
 
     if (!pre || textLen === 0) {
-      gdmdLog('detect: <pre> not ready in "' + mdMatch[1] + '"');
+      gdmdLog('detect: <pre> not ready in "' + filename + '"');
       return false;
     }
 
@@ -141,12 +149,12 @@ class GoogleDriveMarkdownPreview {
     // which makes the <pre> visible — we still don't want to re-render.
     const siblings = pre.parentNode ? Array.from(pre.parentNode.children) : [];
     if (siblings.some(el => el.classList?.contains('gdmd-markdown-content'))) {
-      gdmdLog('detect: already rendered "' + mdMatch[1] + '", skipping');
+      gdmdLog('detect: already rendered "' + filename + '", skipping');
       return true;
     }
 
-    gdmdLog('detect: rendering "' + mdMatch[1] + '" (' + textLen + ' chars)');
-    this.renderMarkdown(pre, pre.textContent, mdMatch[1]);
+    gdmdLog('detect: rendering "' + filename + '" (' + textLen + ' chars)');
+    this.renderMarkdown(pre, pre.textContent, filename);
     return true;
   }
 

@@ -69,7 +69,7 @@ The extension is also injected on `studio.workspace.google.com` (where Drive emb
 
 **Structural `<pre>` matching**: `_tryRenderPre` picks the largest `<pre>` inside the document container by text length. This survives Drive's class-name rotations and incidentally skips any header-style `<pre>` that might share the container.
 
-**Filename regex**: The `aria-label` match is `/Displaying\s+(.+\.md)$/i`. The `.+` (not `[^\s]+`) is required so filenames with spaces match — e.g., `Displaying UFC - Ultimate Fighting Championship.md`.
+**Label detection is locale-independent**: Drive localizes the `aria-label` ("Displaying foo.md" in English; other languages change wording and word order), so detection tests only for the extension: `/\.md(?![\w.])/i` anywhere in the label (the lookahead rejects `foo.md.pdf` / `foo.mdx`). The non-empty `<pre>` requirement is the real gate. The filename (used only for logs and the print title) is extracted with `/Displaying\s+(.+\.md)$/i` when the label is English, falling back to the full label otherwise. The `.+` (not `[^\s]+`) is required so filenames with spaces match.
 
 **Security**: All rendered HTML is sanitized through `DOMPurify.sanitize()` before DOM insertion to prevent XSS from malicious markdown content.
 
