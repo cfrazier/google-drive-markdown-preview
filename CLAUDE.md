@@ -69,7 +69,11 @@ The extension is also injected on `studio.workspace.google.com` (where Drive emb
 
 **Structural `<pre>` matching**: `_tryRenderPre` picks the largest `<pre>` inside the document container by text length. This survives Drive's class-name rotations and incidentally skips any header-style `<pre>` that might share the container.
 
-**Label detection is locale-independent**: Drive localizes the `aria-label` ("Displaying foo.md" in English; other languages change wording and word order), so detection tests only for the extension: `/\.md(?![\w.])/i` anywhere in the label (the lookahead rejects `foo.md.pdf` / `foo.mdx`). The non-empty `<pre>` requirement is the real gate. The filename (used only for logs and the print title) is extracted with `/Displaying\s+(.+\.md)$/i` when the label is English, falling back to the full label otherwise. The `.+` (not `[^\s]+`) is required so filenames with spaces match.
+**Markdown detection (`_markdownFilename`) is locale-independent**: Drive localizes the `aria-label` ("Displaying foo.md" in English; other languages change wording and word order), so it can't be matched as a fixed string.
+- **Primary — active item info**: Drive keeps a hidden `<div style="display:none">` holding JSON (`{"id", "title", "mimeType"}`) on each file node and moves the `id="drive-active-item-info"` to the selected one (on click and arrow keys). If the doc element's label contains that `title`, the preview is the active item and is markdown when `mimeType === 'text/markdown'` or the title ends in `.md`. The title is used as the filename. This rejects names like `not.md but.txt`.
+- **Why the label-contains-title check**: Drive caches several previews; the info only describes the active one. The label contains the filename in every locale, so it ties the info to the right doc element.
+- **Trigger**: the body observer also watches `id` attribute changes, and re-checks every `[role="document"]` when the active-item id moves. Drive can swap the preview before moving the id, so without this the first check reads stale info.
+- **Fallback** (info absent, unparseable, or describing another file, e.g. in the `studio.workspace.google.com` frame — unverified): `/\.md(?![\w.])/i` anywhere in the label (the lookahead rejects `foo.md.pdf` / `foo.mdx`). Filename is extracted with `/Displaying\s+(.+\.md)$/i` in English (`.+` so names with spaces match), else the full label.
 
 **Security**: All rendered HTML is sanitized through `DOMPurify.sanitize()` before DOM insertion to prevent XSS from malicious markdown content.
 

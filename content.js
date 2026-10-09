@@ -1,4 +1,5 @@
 const GDMD_DEBUG = false;
+const ACTIVE_ITEM_INFO_ID = 'drive-active-item-info';
 
 function gdmdLog(...args) {
   if (GDMD_DEBUG) {
@@ -60,7 +61,15 @@ class GoogleDriveMarkdownPreview {
     // double-click, keyboard nav, SPA navigation — with zero timeouts.
     this._bodyObserver = new MutationObserver((mutations) => {
       if (!this.isEnabled) return;
+      let activeItemChanged = false;
       for (const m of mutations) {
+        // Drive moves the #drive-active-item-info id between file nodes on
+        // selection (click or arrow keys). That can land after the preview
+        // swap already triggered us, so re-check every preview when it moves.
+        if (m.type === 'attributes') {
+          if (m.target.id === ACTIVE_ITEM_INFO_ID) activeItemChanged = true;
+          continue;
+        }
         for (const node of m.addedNodes) {
           if (node.nodeType !== 1) continue;
           if (this._isOwnElement(node)) continue;
@@ -79,11 +88,21 @@ class GoogleDriveMarkdownPreview {
             gdmdLog('trigger: observer saw document element: ' + (doc.getAttribute('aria-label') || '(no label yet)'));
             this.renderDocElement(doc);
           }
+
+          if (node.id === ACTIVE_ITEM_INFO_ID || node.querySelector?.('#' + ACTIVE_ITEM_INFO_ID)) {
+            activeItemChanged = true;
+          }
+        }
+      }
+      if (activeItemChanged) {
+        gdmdLog('trigger: active item changed');
+        for (const doc of document.querySelectorAll('[role="document"]')) {
+          this._tryRenderPre(doc);
         }
       }
     });
 
-    this._bodyObserver.observe(document.body, { childList: true, subtree: true });
+    this._bodyObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['id'] });
     gdmdLog('observer: watching document.body for new document elements');
   }
 
@@ -113,18 +132,46 @@ class GoogleDriveMarkdownPreview {
     this._watchDocElement(docEl);
   }
 
-  _tryRenderPre(docEl) {
-    // Drive localizes the label ("Displaying foo.md" in English; other
-    // languages change the wording and word order), so detect by extension
-    // alone. The (?![\w.]) guard rejects names like "foo.md.pdf". Requiring a
-    // non-empty <pre> below keeps this safe: Drive only previews text files
-    // that way.
+  // Drive keeps a hidden JSON blob on each file node and moves the
+  // #drive-active-item-info id to the selected one:
+  //   {"id": "...", "title": "status.md", "mimeType": "text/markdown"}
+  // Unlike the aria-label, it isn't localized.
+  _activeItemInfo() {
+    const el = document.getElementById(ACTIVE_ITEM_INFO_ID);
+    if (!el) return null;
+    try {
+      const info = JSON.parse(el.textContent);
+      return typeof info?.title === 'string' && info.title ? info : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Returns the markdown filename shown in docEl, or null if it isn't markdown.
+  _markdownFilename(docEl) {
     const ariaLabel = docEl.getAttribute('aria-label') || '';
-    if (!/\.md(?![\w.])/i.test(ariaLabel)) return false;
-    // The filename is only used for logs and the print title. Strip the
-    // English prefix when present; in other locales fall back to the full label.
+    if (!ariaLabel) return null;
+
+    // The label contains the filename in every locale, so it tells us whether
+    // this preview (Drive caches several) is the active item.
+    const info = this._activeItemInfo();
+    if (info && ariaLabel.includes(info.title)) {
+      const isMarkdown = info.mimeType === 'text/markdown' || /\.md$/i.test(info.title);
+      return isMarkdown ? info.title : null;
+    }
+
+    // Fallback when the active item info is missing (e.g. other frames) or
+    // describes a different file. Drive localizes the label ("Displaying
+    // foo.md" in English; other languages change wording and word order), so
+    // match the extension anywhere. The (?![\w.]) guard rejects "foo.md.pdf".
+    if (!/\.md(?![\w.])/i.test(ariaLabel)) return null;
     const englishMatch = ariaLabel.match(/Displaying\s+(.+\.md)$/i);
-    const filename = englishMatch ? englishMatch[1] : ariaLabel;
+    return englishMatch ? englishMatch[1] : ariaLabel;
+  }
+
+  _tryRenderPre(docEl) {
+    const filename = this._markdownFilename(docEl);
+    if (!filename) return false;
 
     // Match by structure rather than class: Drive uses different obfuscated
     // class names on different routes (e.g., a-b-r-La on /drive/home vs.
